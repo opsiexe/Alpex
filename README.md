@@ -1,3 +1,5 @@
+<img width="1672" height="467" alt="alpex-github-banner" src="https://github.com/user-attachments/assets/5fff8173-6668-4a25-97cd-c766a02cd885" />
+
 # Alpex
 
 Bot de trading algorithmique (paper trading) avec API FastAPI, moteur de backtest et frontend React/Vite.
