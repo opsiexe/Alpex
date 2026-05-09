@@ -30,6 +30,7 @@ const STRATEGIES = [
     performance: { percent: 12.4, pnl: 8420 },
     tags: ['trend', 'actions'],
     ai: false,
+    multi: false,
   },
   {
     id: 'rsi-rebound',
@@ -45,6 +46,7 @@ const STRATEGIES = [
     performance: { percent: -2.1, pnl: -740 },
     tags: ['crypto', 'mean-reversion'],
     ai: false,
+    multi: false,
   },
   {
     id: 'ia-sentiment',
@@ -60,6 +62,7 @@ const STRATEGIES = [
     performance: { percent: 18.7, pnl: 15600 },
     tags: ['ia', 'actions', 'news'],
     ai: true,
+    multi: false,
   },
   {
     id: 'multi-core',
@@ -75,6 +78,7 @@ const STRATEGIES = [
     performance: { percent: 5.4, pnl: 4200 },
     tags: ['macro', 'fx', 'commodities'],
     ai: false,
+    multi: true,
   },
   {
     id: 'scalping-ai',
@@ -90,6 +94,7 @@ const STRATEGIES = [
     performance: { percent: 9.2, pnl: 3120 },
     tags: ['ia', 'crypto', 'scalp'],
     ai: true,
+    multi: false,
   },
 ]
 
@@ -114,6 +119,7 @@ const STATUS_CONFIG = {
 function formatPercent(value) {
   const amount = Number(value)
   if (!Number.isFinite(amount)) return '—'
+  if (amount === 0) return '0.00%'
   const sign = amount > 0 ? '+' : ''
   return `${sign}${amount.toFixed(2)}%`
 }
@@ -127,6 +133,12 @@ function formatCurrency(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
+}
+
+function getPerformanceTone(value) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount) || amount === 0) return 'text-zinc-300'
+  return amount > 0 ? 'text-emerald-400' : 'text-red-400'
 }
 
 function StrategyStatusBadge({ status }) {
@@ -171,7 +183,7 @@ export default function Strategies() {
 
   const stats = useMemo(() => {
     const uniqueSymbols = new Set()
-    const multiCount = STRATEGIES.filter((strategy) => strategy.type.toLowerCase().includes('multi')).length
+    const multiCount = STRATEGIES.filter((strategy) => strategy.multi).length
     const activeCount = STRATEGIES.filter((strategy) => strategy.status === 'active').length
     const aiCount = STRATEGIES.filter((strategy) => strategy.ai).length
     STRATEGIES.forEach((strategy) => {
@@ -383,7 +395,7 @@ export default function Strategies() {
                   </tr>
                 ) : (
                   filteredStrategies.map((strategy) => {
-                    const performanceClass = strategy.performance.percent >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    const performanceClass = getPerformanceTone(strategy.performance.percent)
                     const startStopConfig = strategy.status === 'active'
                       ? {
                           label: 'Stop',
