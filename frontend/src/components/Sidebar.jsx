@@ -5,7 +5,6 @@ import {
   History,
   TestTubeDiagonal,
   Settings,
-  Zap,
 } from 'lucide-react'
 
 const links = [
@@ -20,8 +19,8 @@ export default function Sidebar() {
   return (
     <aside className="w-16 flex flex-col items-center bg-zinc-950 border-r border-zinc-800 py-4 shrink-0">
       {/* Logo */}
-      <div className="mb-8 flex items-center justify-center w-9 h-9 rounded-xl bg-violet-600/20 border border-violet-500/30">
-        <Zap size={18} className="text-violet-400" />
+      <div className="mb-8 flex items-center justify-center w-9 h-9 rounded-xl overflow-hidden border border-violet-500/30">
+        <img src="/favicon.png" alt="Alpex" className="w-full h-full object-cover" />
       </div>
 
       {/* Nav links */}
