@@ -522,3 +522,171 @@ async def get_analyzed_news(
         # Log l'erreur pour le debug interne
         print(f"Erreur Route News: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_datetime_filter(raw: str | None, label: str):
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        return pd.to_datetime(value, utc=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Parametre {label} invalide: {value}") from exc
+
+
+def _apply_trades_filters(
+    trades: list[dict[str, Any]],
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    symbol: str | None = None,
+    strategy: str | None = None,
+    side: str | None = None,
+    result: str | None = None,
+) -> list[dict[str, Any]]:
+    normalized_symbol = (symbol or "").strip().upper()
+    normalized_strategy = (strategy or "").strip().lower()
+    normalized_side = (side or "").strip().lower()
+    normalized_result = (result or "").strip().lower()
+
+    filtered: list[dict[str, Any]] = []
+    for trade in trades:
+        executed_at = trade.get("executed_at")
+        try:
+            executed_dt = pd.to_datetime(executed_at, utc=True) if executed_at else None
+        except (TypeError, ValueError):
+            executed_dt = None
+
+        if start and executed_dt and executed_dt < start:
+            continue
+        if end and executed_dt and executed_dt > end:
+            continue
+
+        trade_symbol = str(trade.get("symbol") or "").upper()
+        trade_strategy = str(trade.get("strategy") or "").strip().lower()
+        trade_side = str(trade.get("side") or "").strip().lower()
+        trade_result = str(trade.get("result") or "").strip().lower()
+
+        if normalized_symbol and trade_symbol != normalized_symbol:
+            continue
+        if normalized_strategy and trade_strategy != normalized_strategy:
+            continue
+        if normalized_side and trade_side != normalized_side:
+            continue
+        if normalized_result and trade_result != normalized_result:
+            continue
+
+        filtered.append(trade)
+
+    return filtered
+
+
+def _extract_strategies(trades: list[dict[str, Any]]) -> list[str]:
+    strategies = {str(item.get("strategy") or "").strip() for item in trades}
+    cleaned = sorted({s for s in strategies if s})
+    return cleaned
+
+
+def _build_history_csv(trades: list[dict[str, Any]]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "executed_at",
+            "symbol",
+            "strategy",
+            "side",
+            "qty",
+            "avg_price",
+            "notional",
+            "realized_pnl",
+            "result",
+            "status",
+            "order_id",
+        ],
+    )
+    writer.writeheader()
+    for trade in trades:
+        writer.writerow({
+            "executed_at": trade.get("executed_at"),
+            "symbol": trade.get("symbol"),
+            "strategy": trade.get("strategy"),
+            "side": trade.get("side"),
+            "qty": trade.get("qty"),
+            "avg_price": trade.get("avg_price"),
+            "notional": trade.get("notional"),
+            "realized_pnl": trade.get("realized_pnl"),
+            "result": trade.get("result"),
+            "status": trade.get("status"),
+            "order_id": trade.get("order_id"),
+        })
+    return output.getvalue()
+
+
+def _extract_strategy_from_order(order: Any) -> str:
+    client_id = str(getattr(order, "client_order_id", "") or "")
+    match = re.search(r"strategy[:=]([A-Za-z0-9 _-]+)", client_id)
+    if match:
+        return match.group(1).strip()
+    return "MA Crossover"
+
+
+def _fetch_closed_trades(limit: int) -> list[dict[str, Any]]:
+    request = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED,
+        limit=limit,
+        direction=Sort.DESC,
+    )
+    orders = client.get_orders(request)
+    trades: list[dict[str, Any]] = []
+    for order in orders:
+        executed_at = order.filled_at or order.submitted_at or order.created_at
+        executed_at_ts = None
+        if executed_at:
+            executed_at_ts = pd.to_datetime(executed_at, utc=True)
+        qty = _to_float(getattr(order, "filled_qty", None) or getattr(order, "qty", None))
+        avg_price = _to_float(getattr(order, "filled_avg_price", None) or getattr(order, "limit_price", None))
+        notional = qty * avg_price
+        realized_pnl = _to_float(getattr(order, "realized_pnl", None))
+        result = "profit" if realized_pnl >= 0 else "loss"
+
+        trades.append(
+            {
+                "id": str(order.id),
+                "order_id": str(order.id),
+                "executed_at": executed_at_ts.isoformat() if executed_at_ts is not None else None,
+                "executed_at_ms": int(executed_at_ts.timestamp() * 1000) if executed_at_ts is not None else None,
+                "symbol": str(order.symbol),
+                "strategy": _extract_strategy_from_order(order),
+                "side": str(order.side).lower(),
+                "qty": qty,
+                "avg_price": avg_price,
+                "notional": notional,
+                "realized_pnl": realized_pnl,
+                "result": result,
+                "status": str(order.status).lower(),
+                "trigger_type": "technical",
+                "technical_signal": "Signal technique indisponible.",
+                "ai_explanation": None,
+            }
+        )
+    return trades
+
+
+def _enrich_trade_detail(trade: dict[str, Any]) -> dict[str, Any]:
+    detail = dict(trade)
+    detail["technical_signal"] = trade.get("technical_signal") or "Signal technique indisponible."
+    detail["ai_trade_explanation"] = (
+        trade.get("ai_trade_explanation")
+        or trade.get("ai_explanation")
+        or "Aucune explication IA disponible pour ce trade."
+    )
+    detail["trigger_news"] = trade.get("trigger_news")
+
+    try:
+        detail["chart"] = fetch_candles(str(trade.get("symbol") or SYMBOL), "1h", 60)
+    except Exception:
+        detail["chart"] = []
+
+    return detail
