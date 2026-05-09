@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
+  Layers,
   TrendingUp,
   History,
   TestTubeDiagonal,
@@ -9,6 +10,7 @@ import {
 
 const links = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/strategies', icon: Layers, label: 'Stratégies' },
   { to: '/markets',   icon: TrendingUp,      label: 'Markets'   },
   { to: '/history',   icon: History,         label: 'Historique'},
   { to: '/backtest',  icon: TestTubeDiagonal,label: 'Backtest'  },

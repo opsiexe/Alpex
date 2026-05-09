@@ -5,6 +5,7 @@ import Markets from './pages/Markets'
 import Settings from './pages/Settings'
 import History from './pages/History'
 import Backtest from './pages/Backtest'
+import Strategies from './pages/Strategies'
 
 const FULL_SCREEN_ROUTES = ['/markets']
 
@@ -18,6 +19,7 @@ function MainContent() {
         <Route path="/" element={<Navigate to="/dashboard" />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/markets" element={<Markets />} />
+        <Route path="/strategies" element={<Strategies />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/history" element={<History />} />
         <Route path="/backtest" element={<Backtest />} />
