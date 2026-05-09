@@ -1,26 +1,26 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts'
-import { getCandles, connectCandlesWS } from '../api/client'
+import { getCandles, connectCandlesWS, searchSymbols } from '../api/client'
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, RefreshCw,
   Activity, BarChart2, Layers, Radio, Bot, Newspaper,
   ArrowUpRight, ArrowDownRight, AlertCircle
 } from 'lucide-react'
 
-const STOCKS = [
-  { symbol: 'AAPL', name: 'Apple' },
-  { symbol: 'MSFT', name: 'Microsoft' },
-  { symbol: 'NVDA', name: 'NVIDIA' },
-  { symbol: 'AMZN', name: 'Amazon' },
-  { symbol: 'GOOGL', name: 'Alphabet' },
-  { symbol: 'META', name: 'Meta' },
-  { symbol: 'TSLA', name: 'Tesla' },
-  { symbol: 'NFLX', name: 'Netflix' },
-  { symbol: 'AMD', name: 'AMD' },
-  { symbol: 'INTC', name: 'Intel' },
-]
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M', '3M']
 const MACD_SIGNAL_PERIOD = 9
+const TOP_WORLD_STOCKS = [
+  { symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ' },
+  { symbol: 'MSFT', name: 'Microsoft', exchange: 'NASDAQ' },
+  { symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' },
+  { symbol: 'AMZN', name: 'Amazon', exchange: 'NASDAQ' },
+  { symbol: 'GOOGL', name: 'Alphabet', exchange: 'NASDAQ' },
+  { symbol: 'META', name: 'Meta', exchange: 'NASDAQ' },
+  { symbol: 'TSLA', name: 'Tesla', exchange: 'NASDAQ' },
+  { symbol: 'BRK-B', name: 'Berkshire Hathaway', exchange: 'NYSE' },
+  { symbol: 'LLY', name: 'Eli Lilly', exchange: 'NYSE' },
+  { symbol: 'V', name: 'Visa', exchange: 'NYSE' },
+]
 
 const INDICATORS = [
   { id: 'ma', label: 'MA', color: '#f59e0b' },
@@ -207,6 +207,8 @@ export default function Markets() {
   const [showSymbolMenu, setShowSymbolMenu] = useState(false)
   const [showTfMenu, setShowTfMenu] = useState(false)
   const [symbolSearch, setSymbolSearch] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
   const [currentPrice, setCurrentPrice] = useState(null)
   const [priceChange, setPriceChange] = useState(null)
   const [wsConnected, setWsConnected] = useState(false)
@@ -511,12 +513,35 @@ export default function Markets() {
 
   const toggleIndicator = (id) => setActiveIndicators(prev => ({ ...prev, [id]: !prev[id] }))
 
+  useEffect(() => {
+    const q = symbolSearch.trim()
+    if (!q) {
+      setSearchResults([])
+      setSearchLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setSearchLoading(true)
+    const handle = setTimeout(async () => {
+      try {
+        const results = await searchSymbols(q, 25)
+        if (!cancelled) setSearchResults(Array.isArray(results) ? results : [])
+      } catch {
+        if (!cancelled) setSearchResults([])
+      } finally {
+        if (!cancelled) setSearchLoading(false)
+      }
+    }, 300)
+
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [symbolSearch])
+
   const isPositive = priceChange >= 0
-  const filteredStocks = STOCKS.filter((s) => {
-    const q = symbolSearch.trim().toLowerCase()
-    if (!q) return true
-    return s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
-  })
+  const hasSearchQuery = symbolSearch.trim().length > 0
 
   return (
     <div className="flex h-full overflow-hidden bg-zinc-950 text-zinc-100">
@@ -538,12 +563,38 @@ export default function Markets() {
               <ChevronDown size={13} className="text-zinc-400" />
             </button>
             {showSymbolMenu && (
-              <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-[80] min-w-[240px] py-1">
-                <div className="max-h-64 overflow-y-auto py-1">
-                  {filteredStocks.length === 0 ? (
+              <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-[80] min-w-[360px] max-w-[420px] py-1">
+                <div className="px-3 pt-2 pb-2 border-b border-zinc-800">
+                  <input
+                    type="text"
+                    value={symbolSearch}
+                    onChange={(e) => setSymbolSearch(e.target.value)}
+                    placeholder="Rechercher une action..."
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-violet-500"
+                  />
+                </div>
+                <div className="max-h-80 overflow-y-auto py-1">
+                  {searchLoading ? (
+                    <div className="px-4 py-2 text-xs text-zinc-500">Recherche…</div>
+                  ) : !hasSearchQuery ? (
+                    <>
+                      <div className="px-4 py-2 text-[10px] text-zinc-500 uppercase tracking-wider">Top 10 mondial</div>
+                      {TOP_WORLD_STOCKS.map((s) => (
+                        <button
+                          key={s.symbol}
+                          onClick={() => { setSymbol(s.symbol); setShowSymbolMenu(false); setSymbolSearch('') }}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 transition-colors ${s.symbol === symbol ? 'text-violet-400 font-semibold' : 'text-zinc-300'}`}
+                        >
+                          <span className="font-semibold">{s.symbol}</span>
+                          <span className="ml-2 text-zinc-500 text-xs">{s.name}</span>
+                          {s.exchange ? <span className="ml-2 text-zinc-600 text-[10px] uppercase">{s.exchange}</span> : null}
+                        </button>
+                      ))}
+                    </>
+                  ) : searchResults.length === 0 ? (
                     <div className="px-4 py-2 text-xs text-zinc-500">Aucun résultat</div>
                   ) : (
-                    filteredStocks.map((s) => (
+                    searchResults.map((s) => (
                       <button
                         key={s.symbol}
                         onClick={() => { setSymbol(s.symbol); setShowSymbolMenu(false); setSymbolSearch('') }}
@@ -551,23 +602,13 @@ export default function Markets() {
                       >
                         <span className="font-semibold">{s.symbol}</span>
                         <span className="ml-2 text-zinc-500 text-xs">{s.name}</span>
+                        {s.exchange ? <span className="ml-2 text-zinc-600 text-[10px] uppercase">{s.exchange}</span> : null}
                       </button>
                     ))
                   )}
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="w-[260px] max-w-full">
-            <input
-              type="text"
-              value={symbolSearch}
-              onFocus={() => { setShowSymbolMenu(true); setShowTfMenu(false) }}
-              onChange={(e) => { setSymbolSearch(e.target.value); setShowSymbolMenu(true); setShowTfMenu(false) }}
-              placeholder="Rechercher une action..."
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-violet-500"
-            />
           </div>
 
           {/* Price display */}

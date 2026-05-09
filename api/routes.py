@@ -2,6 +2,7 @@ import asyncio
 from typing import Any
 
 import pandas as pd
+import requests
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Query
 from bot.broker import get_account, get_position
@@ -22,6 +23,7 @@ _TF_CONFIG = {
     "1M": {"interval": "1mo", "period": "max"},
     "3M": {"interval": "3mo", "period": "max"},
 }
+_YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 
 
 def fetch_candles(symbol: str, tf: str, limit: int = 300) -> list[dict[str, Any]]:
@@ -73,6 +75,42 @@ def fetch_candles(symbol: str, tf: str, limit: int = 300) -> list[dict[str, Any]
         )
 
     return candles
+
+
+def search_symbols(query: str, limit: int = 20) -> list[dict[str, str]]:
+    q = query.strip()
+    if len(q) < 1:
+        return []
+
+    response = requests.get(
+        _YAHOO_SEARCH_URL,
+        params={"q": q, "quotes_count": max(1, min(limit, 50)), "news_count": 0},
+        headers={"User-Agent": "alpex/1.0"},
+        timeout=8,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    quotes = payload.get("quotes", [])
+
+    results: list[dict[str, str]] = []
+    for quote in quotes:
+        quote_type = str(quote.get("quoteType", "")).upper()
+        symbol = str(quote.get("symbol", "")).strip().upper()
+        if quote_type != "EQUITY" or not symbol:
+            continue
+        results.append(
+            {
+                "symbol": symbol,
+                "name": str(quote.get("shortname") or quote.get("longname") or symbol).strip(),
+                "exchange": str(quote.get("exchDisp") or quote.get("exchange") or "").strip(),
+                "type": quote_type,
+            }
+        )
+
+    dedup: dict[str, dict[str, str]] = {}
+    for item in results:
+        dedup[item["symbol"]] = item
+    return list(dedup.values())[:limit]
 # --- Compte ---
 @router.get("/account")
 async def account():
@@ -116,3 +154,14 @@ async def get_candles(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Erreur fournisseur marché: {exc}") from exc
+
+
+@router.get("/symbols/search")
+async def get_symbols_search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+):
+    try:
+        return await asyncio.to_thread(search_symbols, q, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur recherche symboles: {exc}") from exc
