@@ -2,16 +2,15 @@ import asyncio
 import re
 from typing import Any
 import xml.etree.ElementTree as ET
-
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from bot.broker import get_account, get_position
 from bot.logger import log_buffer
 from api.bot_manager import bot_manager
 from config import MA_SHORT, MA_LONG, SYMBOL
-
+from api.ia import get_complete_trading_analysis
 router = APIRouter()
 
 _TF_CONFIG = {
@@ -215,6 +214,12 @@ def fetch_news(symbol: str, limit: int = 20) -> list[dict[str, Any]]:
     for item in news_items:
         dedup[item["title"]] = item
     return list(dedup.values())[:limit]
+
+def summarize_news(news: list[dict[str, Any]]) -> dict[str, Any]:
+    if not news:
+        return {"summary": "Aucune actualité récente trouvée.", "sentiment": 0.0}
+
+
 # --- Compte ---
 @router.get("/account")
 async def account():
@@ -280,3 +285,51 @@ async def get_news(
         return await asyncio.to_thread(fetch_news, symbol, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Erreur news marché: {exc}") from exc
+
+
+@router.get("/news/analyze")
+async def get_analyzed_news(
+        symbol: str = Query(..., min_length=1),
+        limit: int = Query(10, ge=1, le=20)
+):
+    try:
+        # 1. Récupération des news (bloquant -> to_thread)
+        # On utilise ta fonction fetch_news existante
+        news_items = await asyncio.to_thread(fetch_news, symbol, limit)
+
+        if not news_items:
+            return {
+                "symbol": symbol,
+                "global_summary": "Aucune actualité trouvée pour ce symbole.",
+                "news": []
+            }
+
+        # 2. Analyse IA (bloquant -> to_thread)
+        # On envoie la liste des news à Gemini
+        ai_data = await asyncio.to_thread(get_complete_trading_analysis, news_items)
+
+        # 3. Fusion des données
+        # On ajoute le sentiment et le score de l'IA à chaque news correspondante
+        if ai_data and "news_analysis" in ai_data:
+            analysis_map = {item["id"]: item for item in ai_data["news_analysis"]}
+
+            for idx, news in enumerate(news_items):
+                analysis = analysis_map.get(idx)
+                if analysis:
+                    news["ai_sentiment"] = analysis.get("sentiment", "Neutral")
+                    news["ai_score"] = analysis.get("score", 50)
+                else:
+                    news["ai_sentiment"] = "Neutral"
+                    news["ai_score"] = 50
+
+        # 4. Réponse finale structurée
+        return {
+            "symbol": symbol,
+            "global_summary": ai_data.get("global_summary") if ai_data else "Analyse indisponible",
+            "news": news_items
+        }
+
+    except Exception as e:
+        # Log l'erreur pour le debug interne
+        print(f"Erreur Route News: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

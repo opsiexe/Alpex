@@ -46,3 +46,33 @@ export const connectCandlesWS = (symbol, tf, onMsg, onOpen, onClose) => {
   ws.onmessage = e => { try { onMsg(JSON.parse(e.data)) } catch (err) { console.error('[CandlesWS] Failed to parse message', err) } }
   return ws
 }
+
+// --- Section News & IA ---
+
+/**
+ * Récupère les news analysées (Résumé global + Sentiments individuels) via REST.
+ * Utile pour l'affichage initial de la page.
+ */
+export const getAnalyzedNews = (symbol, limit = 10) =>
+  api.get(`/news?symbol=${encodeURIComponent(symbol)}&limit=${limit}`).then(r => r.data)
+
+/**
+ * Connexion WebSocket pour recevoir les analyses IA en temps réel.
+ * @param {string} symbol - Le ticker (ex: AAPL)
+ * @param {function} onMsg - Callback quand une nouvelle analyse arrive
+ */
+export const connectAINewsWS = (symbol, onMsg) => {
+  const ws = new WebSocket(`${WS}/ws/ai-news?symbol=${encodeURIComponent(symbol)}`)
+
+  ws.onmessage = e => {
+    try {
+      onMsg(JSON.parse(e.data))
+    } catch (err) {
+      console.error('[AINewsWS] Erreur parsing:', err)
+    }
+  }
+
+  ws.onerror = (err) => console.error('[AINewsWS] Erreur connection:', err)
+
+  return ws
+}
