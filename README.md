@@ -8,7 +8,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat&logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react&logoColor=black)
 ![Alpaca](https://img.shields.io/badge/Alpaca-Paper%20%2F%20Live-FBAE17?style=flat)
-![License](https://img.shields.io/badge/license-MIT-green?style=flat)
+![License](https://img.shields.io/badge/license-GNU%20GPLv3-blue?style=flat)
 
 ---
 
@@ -232,7 +232,7 @@ Les performances passées (backtesting) ne garantissent pas les performances fut
 
 ## Licence
 
-MIT — voir [LICENSE](LICENSE)
+GNU GPLv3 — voir [LICENSE](LICENSE)
 
 ---
 
