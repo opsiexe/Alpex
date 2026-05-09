@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts'
-import { getCandles, connectCandlesWS, searchSymbols } from '../api/client'
+import { getCandles, connectCandlesWS, searchSymbols, getNews } from '../api/client'
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, RefreshCw,
   Activity, BarChart2, Layers, Radio, Bot, Newspaper,
@@ -82,7 +82,38 @@ function formatAgo(ts) {
   return `${Math.floor(diff / 60)}h`
 }
 
-function NewsItem({ item }) {
+function getRelevance(item, symbol) {
+  const apiRelevance = String(item?.relevance || '').toLowerCase()
+  if (apiRelevance === 'high' || apiRelevance === 'medium' || apiRelevance === 'low') {
+    return apiRelevance
+  }
+
+  const symbolUp = String(symbol || '').toUpperCase()
+  const title = String(item?.title || '')
+  const url = String(item?.url || '')
+  const titleUp = title.toUpperCase()
+  const normalizedSymbol = symbolUp.replace(/[^A-Z0-9]/g, '')
+  const normalizedText = `${title}${url}`.toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+  if ((symbolUp && titleUp.includes(symbolUp)) || (normalizedSymbol && normalizedText.includes(normalizedSymbol))) {
+    return 'high'
+  }
+
+  const symbolRoot = symbolUp.split(/[-.]/)[0]
+  if (symbolRoot && (titleUp.includes(symbolRoot) || normalizedText.includes(symbolRoot))) {
+    return 'medium'
+  }
+  return 'low'
+}
+
+function NewsItem({ item, symbol }) {
+  const relevance = getRelevance(item, symbol)
+  const relevanceMeta = {
+    high: { label: 'Pertinence forte', cls: 'text-emerald-400 bg-emerald-500/10' },
+    medium: { label: 'Pertinence moyenne', cls: 'text-amber-400 bg-amber-500/10' },
+    low: { label: 'Pertinence faible', cls: 'text-zinc-400 bg-zinc-700/60' },
+  }[relevance]
+
   return (
     <div className="border-b border-zinc-800/70 pb-3 mb-3 last:border-0 last:mb-0">
       <div className="flex items-start justify-between gap-2 mb-1">
@@ -97,7 +128,10 @@ function NewsItem({ item }) {
         <span className="text-[10px] text-zinc-500 whitespace-nowrap">{formatAgo(item.timestamp)}</span>
       </div>
       <div className="flex items-center justify-between">
-        <SentimentBadge score={item.sentiment} />
+        <div className="flex items-center gap-1.5">
+          <SentimentBadge score={item.sentiment} />
+          <span className={`text-[10px] px-2 py-0.5 rounded-full ${relevanceMeta.cls}`}>{relevanceMeta.label}</span>
+        </div>
         <span className="text-[10px] text-zinc-600">{item.source}</span>
       </div>
       <ScoreBar score={item.sentiment} />
@@ -185,6 +219,14 @@ function generateAISummary(symbol) {
   return `${base} montre une dynamique haussière modérée sur les sessions récentes. Le sentiment global des actualités est légèrement positif (score +0.18). Les volumes sont en hausse de 12% par rapport à la moyenne hebdomadaire. Attention au niveau de résistance à surveiller dans les prochaines heures.`
 }
 
+function buildSummaryFromNews(symbol, items) {
+  if (!items.length) return generateAISummary(symbol)
+  const avg = items.reduce((sum, n) => sum + (n.sentiment || 0), 0) / items.length
+  const tone = avg >= 0.2 ? 'positif' : avg <= -0.2 ? 'négatif' : 'mitigé'
+  const latest = items[0]?.title || `Pas de headline récente pour ${symbol}.`
+  return `${symbol} : flux d'actualité ${tone} (${avg >= 0 ? '+' : ''}${avg.toFixed(2)}). Dernier titre: ${latest}`
+}
+
 /* ═══════════════════════════════════════════════════
    Main Markets Page
 ═══════════════════════════════════════════════════ */
@@ -218,6 +260,24 @@ export default function Markets() {
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [showTrades, setShowTrades] = useState(true)
   const [candles, setCandles] = useState([])
+
+  const refreshNews = useCallback(async (targetSymbol) => {
+    setNewsLoading(true)
+    try {
+      const items = await getNews(targetSymbol, 20)
+      const normalized = Array.isArray(items) ? items : []
+      const finalItems = normalized.length ? normalized : generateDemoNews(targetSymbol)
+      setNews(finalItems)
+      setAiSummary(buildSummaryFromNews(targetSymbol, finalItems))
+    } catch {
+      const fallback = generateDemoNews(targetSymbol)
+      setNews(fallback)
+      setAiSummary(buildSummaryFromNews(targetSymbol, fallback))
+    } finally {
+      setNewsLoading(false)
+      setSummaryLoading(false)
+    }
+  }, [])
 
   /* ── Compute MA ─────────────────────────────── */
   const computeMA = useCallback((data, period = 20) =>
@@ -439,12 +499,6 @@ export default function Markets() {
     }
     loadCandles()
 
-    // Load news & summary
-    setNewsLoading(true)
-    setSummaryLoading(true)
-    setTimeout(() => { setNews(generateDemoNews(symbol)); setNewsLoading(false) }, 800)
-    setTimeout(() => { setAiSummary(generateAISummary(symbol)); setSummaryLoading(false) }, 1400)
-
     // WebSocket for live price
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
     try {
@@ -495,6 +549,13 @@ export default function Markets() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe])
+
+  useEffect(() => {
+    setSummaryLoading(true)
+    refreshNews(symbol)
+    const timer = setInterval(() => { refreshNews(symbol) }, 30000)
+    return () => clearInterval(timer)
+  }, [symbol, refreshNews])
 
   /* ── Apply indicators when toggles change ───── */
   useEffect(() => {
@@ -743,7 +804,7 @@ export default function Markets() {
               <span className="text-sm">Aucune actualité disponible</span>
             </div>
           ) : (
-            news.map((item, idx) => <NewsItem key={idx} item={item} />)
+            news.map((item, idx) => <NewsItem key={idx} item={item} symbol={symbol} />)
           )}
         </div>
 
@@ -751,10 +812,8 @@ export default function Markets() {
         <div className="border-t border-zinc-800 px-4 py-2.5 shrink-0">
           <button
             onClick={() => {
-              setNewsLoading(true)
               setSummaryLoading(true)
-              setTimeout(() => { setNews(generateDemoNews(symbol)); setNewsLoading(false) }, 600)
-              setTimeout(() => { setAiSummary(generateAISummary(symbol)); setSummaryLoading(false) }, 1000)
+              refreshNews(symbol)
             }}
             className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
           >

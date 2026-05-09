@@ -1,5 +1,7 @@
 import asyncio
+import re
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import requests
@@ -24,6 +26,9 @@ _TF_CONFIG = {
     "3M": {"interval": "3mo", "period": "max"},
 }
 _YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+_YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+_POSITIVE_NEWS_WORDS = {"beat", "surge", "growth", "record", "upgrade", "strong", "rally", "gain", "profit", "outperform"}
+_NEGATIVE_NEWS_WORDS = {"miss", "drop", "fall", "downgrade", "weak", "lawsuit", "risk", "decline", "loss", "cut"}
 
 
 def fetch_candles(symbol: str, tf: str, limit: int = 300) -> list[dict[str, Any]]:
@@ -111,6 +116,105 @@ def search_symbols(query: str, limit: int = 20) -> list[dict[str, str]]:
     for item in results:
         dedup[item["symbol"]] = item
     return list(dedup.values())[:limit]
+
+
+def _score_news_sentiment(title: str) -> float:
+    words = set(re.findall(r"[a-z]+", title.lower()))
+    pos = len(words & _POSITIVE_NEWS_WORDS)
+    neg = len(words & _NEGATIVE_NEWS_WORDS)
+    if pos == 0 and neg == 0:
+        return 0.0
+    score = (pos - neg) / max(pos + neg, 1)
+    return max(-1.0, min(1.0, float(score)))
+
+
+def fetch_news(symbol: str, limit: int = 20) -> list[dict[str, Any]]:
+    ticker = yf.Ticker(symbol.upper())
+    raw_items = ticker.news or []
+    news_items: list[dict[str, Any]] = []
+
+    if isinstance(raw_items, list):
+        for item in raw_items[:limit]:
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            news_items.append(
+                {
+                    "title": title,
+                    "url": str(item.get("link") or "#").strip() or "#",
+                    "source": str(item.get("publisher") or "Yahoo Finance").strip(),
+                    "timestamp": int(item.get("providerPublishTime") or pd.Timestamp.utcnow().timestamp()) * 1000,
+                    "sentiment": _score_news_sentiment(title),
+                }
+            )
+
+    # Fallback 1: Yahoo Search API (news_count)
+    if not news_items:
+        try:
+            response = requests.get(
+                _YAHOO_SEARCH_URL,
+                params={"q": symbol.upper(), "quotes_count": 0, "news_count": max(1, min(limit, 50))},
+                headers={"User-Agent": "alpex/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            for item in payload.get("news", [])[:limit]:
+                title = str(item.get("title") or "").strip()
+                if not title:
+                    continue
+                news_items.append(
+                    {
+                        "title": title,
+                        "url": str(item.get("link") or "#").strip() or "#",
+                        "source": str(item.get("publisher") or "Yahoo Finance").strip(),
+                        "timestamp": int(item.get("providerPublishTime") or pd.Timestamp.utcnow().timestamp()) * 1000,
+                        "sentiment": _score_news_sentiment(title),
+                    }
+                )
+        except Exception:
+            pass
+
+    # Fallback 2: Yahoo RSS
+    if not news_items:
+        try:
+            response = requests.get(
+                _YAHOO_RSS_URL,
+                params={"s": symbol.upper(), "region": "US", "lang": "en-US"},
+                headers={"User-Agent": "alpex/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.text)
+            items = root.findall(".//item")
+            for item in items[:limit]:
+                title = (item.findtext("title") or "").strip()
+                if not title:
+                    continue
+                link = (item.findtext("link") or "#").strip() or "#"
+                pub_date = item.findtext("pubDate")
+                timestamp = pd.Timestamp.utcnow().timestamp()
+                if pub_date:
+                    try:
+                        timestamp = pd.to_datetime(pub_date, utc=True).timestamp()
+                    except Exception:
+                        pass
+                news_items.append(
+                    {
+                        "title": title,
+                        "url": link,
+                        "source": "Yahoo Finance",
+                        "timestamp": int(timestamp * 1000),
+                        "sentiment": _score_news_sentiment(title),
+                    }
+                )
+        except Exception:
+            pass
+
+    dedup: dict[str, dict[str, Any]] = {}
+    for item in news_items:
+        dedup[item["title"]] = item
+    return list(dedup.values())[:limit]
 # --- Compte ---
 @router.get("/account")
 async def account():
@@ -165,3 +269,14 @@ async def get_symbols_search(
         return await asyncio.to_thread(search_symbols, q, limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Erreur recherche symboles: {exc}") from exc
+
+
+@router.get("/news")
+async def get_news(
+    symbol: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+):
+    try:
+        return await asyncio.to_thread(fetch_news, symbol, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur news marché: {exc}") from exc

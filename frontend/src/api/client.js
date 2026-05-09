@@ -32,8 +32,8 @@ export const getCandles = (symbol, tf, limit = 300) =>
   api.get(`/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}&limit=${limit}`).then(r => r.data)
 export const searchSymbols = (query, limit = 20) =>
   api.get(`/symbols/search?q=${encodeURIComponent(query)}&limit=${limit}`).then(r => r.data)
-export const getNews = (symbol) =>
-  api.get(`/news?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
+export const getNews = (symbol, limit = 20) =>
+  api.get(`/news?symbol=${encodeURIComponent(symbol)}&limit=${limit}`).then(r => r.data)
 export const getMarketSummary = (symbol) =>
   api.get(`/market-summary?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
 export const getMarketTrades = (symbol) =>
