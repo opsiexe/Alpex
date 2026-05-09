@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts'
+import { getCandles, connectCandlesWS } from '../api/client'
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, RefreshCw,
   Activity, BarChart2, Layers, Radio, Bot, Newspaper,
   ArrowUpRight, ArrowDownRight, AlertCircle
 } from 'lucide-react'
-
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const WS_BASE = BASE.replace(/^http/, 'ws')
 
 const STOCKS = [
   { symbol: 'AAPL', name: 'Apple' },
@@ -399,32 +397,45 @@ export default function Markets() {
   /* ── Load candle data when symbol/timeframe changes ── */
   useEffect(() => {
     if (!candleSeriesRef.current) return
+    let cancelled = false
 
     // Reset indicators series on symbol/tf change
     ;[maSeriesRef, bbUpperRef, bbLowerRef, rsiSeriesRef, macdSeriesRef, macdSignalRef].forEach(r => {
       if (r.current && chartRef.current) { try { chartRef.current.removeSeries(r.current) } catch { /* series already removed */ } r.current = null }
     })
 
-    const data = generateDemoCandles(symbol, timeframe)
-    setCandles(data)
-    candleSeriesRef.current.setData(data)
-
-    setTimeout(() => {
-      if (data.length) {
-        setCurrentPrice(data[data.length - 1].close)
-        const first = data[0].close
-        const last = data[data.length - 1].close
-        setPriceChange(((last - first) / first) * 100)
-      }
-    }, 0)
-
-    // Trade overlays
-    if (showTrades) {
-      const trades = generateDemoTrades(data)
-      setTradeMarkers(buildTradeMarkers(trades))
+    const updatePriceData = (data) => {
+      if (!data.length) return
+      setCurrentPrice(data[data.length - 1].close)
+      const first = data[0].close
+      const last = data[data.length - 1].close
+      setPriceChange(((last - first) / first) * 100)
     }
 
-    chartRef.current?.timeScale().fitContent()
+    const loadCandles = async () => {
+      try {
+        const data = await getCandles(symbol, timeframe, 300)
+        if (cancelled || !candleSeriesRef.current || !Array.isArray(data) || !data.length) return
+        setCandles(data)
+        candleSeriesRef.current.setData(data)
+        updatePriceData(data)
+        if (showTrades) {
+          setTradeMarkers(buildTradeMarkers(generateDemoTrades(data)))
+        }
+        chartRef.current?.timeScale().fitContent()
+      } catch {
+        if (cancelled || !candleSeriesRef.current) return
+        const fallback = generateDemoCandles(symbol, timeframe)
+        setCandles(fallback)
+        candleSeriesRef.current.setData(fallback)
+        updatePriceData(fallback)
+        if (showTrades) {
+          setTradeMarkers(buildTradeMarkers(generateDemoTrades(fallback)))
+        }
+        chartRef.current?.timeScale().fitContent()
+      }
+    }
+    loadCandles()
 
     // Load news & summary
     setNewsLoading(true)
@@ -435,25 +446,51 @@ export default function Markets() {
     // WebSocket for live price
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
     try {
-      const ws = new WebSocket(`${WS_BASE}/ws/candles?symbol=${encodeURIComponent(symbol)}&tf=${timeframe}`)
-      ws.onopen = () => setWsConnected(true)
-      ws.onclose = () => setWsConnected(false)
-      ws.onerror = () => setWsConnected(false)
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data)
-          if (msg.type === 'candle' && candleSeriesRef.current) {
+      const ws = connectCandlesWS(
+        symbol,
+        timeframe,
+        (msg) => {
+          if (!candleSeriesRef.current || cancelled) return
+          if (msg.type === 'history' && Array.isArray(msg.data) && msg.data.length) {
+            setCandles(msg.data)
+            candleSeriesRef.current.setData(msg.data)
+            updatePriceData(msg.data)
+            chartRef.current?.timeScale().fitContent()
+            return
+          }
+          if (msg.type === 'candle' && msg.data) {
             candleSeriesRef.current.update(msg.data)
             setCurrentPrice(msg.data.close)
+            setCandles((prev) => {
+              if (!prev.length) return [msg.data]
+              const last = prev[prev.length - 1]
+              if (last.time === msg.data.time) {
+                const next = [...prev]
+                next[next.length - 1] = msg.data
+                const first = next[0].close
+                setPriceChange(((msg.data.close - first) / first) * 100)
+                return next
+              }
+              const next = [...prev.slice(-299), msg.data]
+              const first = next[0].close
+              setPriceChange(((msg.data.close - first) / first) * 100)
+              return next
+            })
           }
-        } catch { /* invalid WS message */ }
-      }
+        },
+        () => setWsConnected(true),
+        () => setWsConnected(false),
+      )
+      ws.onerror = () => setWsConnected(false)
       wsRef.current = ws
     } catch {
       setTimeout(() => setWsConnected(false), 0)
     }
 
-    return () => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null } }
+    return () => {
+      cancelled = true
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe])
 

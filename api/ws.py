@@ -2,6 +2,7 @@ import asyncio, json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from bot.broker import get_account
 from bot.logger import log_buffer, register_ws_callback, unregister_ws_callback
+from api.routes import fetch_candles
 
 ws_router = APIRouter()
 
@@ -32,3 +33,25 @@ async def ws_metrics(ws: WebSocket):
             await ws.send_text(json.dumps(data))
             await asyncio.sleep(3)
     except WebSocketDisconnect: pass
+
+
+@ws_router.websocket("/candles")
+async def ws_candles(ws: WebSocket, symbol: str = "AAPL", tf: str = "1h"):
+    await ws.accept()
+    symbol = symbol.upper()
+    poll_seconds = 5 if tf in {"1m", "5m", "15m"} else 15
+
+    try:
+        history = await asyncio.to_thread(fetch_candles, symbol, tf, 300)
+        await ws.send_text(json.dumps({"type": "history", "data": history}))
+    except Exception as exc:
+        await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+
+    try:
+        while True:
+            candles = await asyncio.to_thread(fetch_candles, symbol, tf, 2)
+            if candles:
+                await ws.send_text(json.dumps({"type": "candle", "data": candles[-1]}))
+            await asyncio.sleep(poll_seconds)
+    except WebSocketDisconnect:
+        pass
