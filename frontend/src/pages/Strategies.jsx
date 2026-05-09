@@ -1,118 +1,36 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  AlertTriangle,
   Bot,
-  Copy,
   Filter,
   Layers,
   Pencil,
   PlayCircle,
   PauseCircle,
-  Plus,
   Power,
+  RefreshCcw,
   Search,
   Tag,
-  Trash2,
 } from 'lucide-react'
 
-const STRATEGIES = [
-  {
-    id: 'alpha-ma',
-    name: 'Alpha Crossover',
-    type: 'MA Crossover',
-    symbols: ['AAPL', 'MSFT', 'NVDA'],
-    parameters: [
-      { label: 'MA rapide', value: '12' },
-      { label: 'MA lente', value: '48' },
-      { label: 'Risk', value: '1.5%' },
-    ],
-    status: 'active',
-    performance: { percent: 12.4, pnl: 8420 },
-    tags: ['trend', 'actions'],
-    ai: false,
-    multi: false,
-  },
-  {
-    id: 'rsi-rebound',
-    name: 'RSI Rebound',
-    type: 'RSI',
-    symbols: ['BTCUSDT', 'ETHUSDT'],
-    parameters: [
-      { label: 'RSI min', value: '28' },
-      { label: 'RSI max', value: '72' },
-      { label: 'Levier', value: '2x' },
-    ],
-    status: 'paused',
-    performance: { percent: -2.1, pnl: -740 },
-    tags: ['crypto', 'mean-reversion'],
-    ai: false,
-    multi: false,
-  },
-  {
-    id: 'ia-sentiment',
-    name: 'Sentiment IA',
-    type: 'IA pure',
-    symbols: ['TSLA', 'NVDA', 'META'],
-    parameters: [
-      { label: 'Modèle', value: 'Gemini' },
-      { label: 'Confiance', value: '78%' },
-      { label: 'Horizon', value: '1D' },
-    ],
-    status: 'active',
-    performance: { percent: 18.7, pnl: 15600 },
-    tags: ['ia', 'actions', 'news'],
-    ai: true,
-    multi: false,
-  },
-  {
-    id: 'multi-core',
-    name: 'Multi-Asset Core',
-    type: 'Multi-stratégies',
-    symbols: ['SPY', 'QQQ', 'XAUUSD', 'EURUSD'],
-    parameters: [
-      { label: 'Allocation', value: 'Diversifiée' },
-      { label: 'Rebalance', value: 'Hebdo' },
-      { label: 'Mode', value: 'Système' },
-    ],
-    status: 'stopped',
-    performance: { percent: 5.4, pnl: 4200 },
-    tags: ['macro', 'fx', 'commodities'],
-    ai: false,
-    multi: true,
-  },
-  {
-    id: 'scalping-ai',
-    name: 'Scalping IA',
-    type: 'IA + RSI',
-    symbols: ['SOLUSDT', 'BNBUSDT', 'ADAUSDT'],
-    parameters: [
-      { label: 'Fenêtre', value: '2m' },
-      { label: 'Stop', value: '0.6%' },
-      { label: 'Target', value: '1.2%' },
-    ],
-    status: 'active',
-    performance: { percent: 9.2, pnl: 3120 },
-    tags: ['ia', 'crypto', 'scalp'],
-    ai: true,
-    multi: false,
-  },
-]
+import { getStrategies, startStrategy, stopStrategy, updateStrategyConfig } from '../api/client'
 
 const STATUS_CONFIG = {
-  active: {
+  running: {
     label: 'Actif',
     className: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
     icon: PlayCircle,
-  },
-  paused: {
-    label: 'En pause',
-    className: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-    icon: PauseCircle,
   },
   stopped: {
     label: 'Arrêté',
     className: 'text-zinc-400 bg-zinc-700/40 border-zinc-600/40',
     icon: Power,
+  },
+  error: {
+    label: 'Erreur',
+    className: 'text-rose-300 bg-rose-500/10 border-rose-500/30',
+    icon: AlertTriangle,
   },
 }
 

@@ -16,6 +16,11 @@ export const getDashboardAlerts = (limit = 20) => api.get(`/dashboard/alerts?lim
 export const getDashboardAiSummary = (limit = 10) => api.get(`/dashboard/ai-summary?limit=${limit}`).then(r => r.data)
 export const startBot = () => api.post('/bot/start').then(r => r.data)
 export const stopBot = () => api.post('/bot/stop').then(r => r.data)
+export const getStrategies = () => api.get('/strategies').then(r => r.data)
+export const startStrategy = (strategyId) => api.post(`/strategies/${encodeURIComponent(strategyId)}/start`).then(r => r.data)
+export const stopStrategy = (strategyId) => api.post(`/strategies/${encodeURIComponent(strategyId)}/stop`).then(r => r.data)
+export const updateStrategyConfig = (strategyId, payload) =>
+  api.patch(`/strategies/${encodeURIComponent(strategyId)}/config`, payload).then(r => r.data)
 
 // WebSockets
 export const connectLogsWS = (onMsg) => {

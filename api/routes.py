@@ -9,6 +9,7 @@ import requests
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 from alpaca.common.enums import Sort
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest
@@ -34,6 +35,11 @@ _YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 _YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 _POSITIVE_NEWS_WORDS = {"beat", "surge", "growth", "record", "upgrade", "strong", "rally", "gain", "profit", "outperform"}
 _NEGATIVE_NEWS_WORDS = {"miss", "drop", "fall", "downgrade", "weak", "lawsuit", "risk", "decline", "loss", "cut"}
+
+
+class StrategyConfigPatch(BaseModel):
+    symbols: list[str] | None = None
+    parameters: dict[str, Any] | None = None
 
 
 def fetch_candles(symbol: str, tf: str, limit: int = 300) -> list[dict[str, Any]]:
@@ -236,23 +242,23 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 
 def _build_live_strategies() -> list[dict[str, Any]]:
-    account = get_account()
-    equity = _to_float(account.get("equity"), 0.0)
-    pnl = _to_float(account.get("pnl"), 0.0)
-    base_equity = max(equity - pnl, 1.0)
-    performance = (pnl / base_equity) * 100.0
-    state = "active" if bot_manager.running else "paused"
-
-    return [
-        {
-            "id": "ma-crossover",
-            "name": f"MA Crossover {MA_SHORT}/{MA_LONG}",
-            "symbol": SYMBOL,
-            "performance": performance,
-            "state": state,
-            "latency_ms": None,
-        }
-    ]
+    strategies = bot_manager.strategy_manager.list_strategies()
+    live: list[dict[str, Any]] = []
+    for strategy in strategies:
+        status = str(strategy.get("status") or "stopped").lower()
+        state = "active" if status == "running" else "error" if status == "error" else "paused"
+        symbols = strategy.get("symbols") or []
+        live.append(
+            {
+                "id": strategy.get("id"),
+                "name": strategy.get("name"),
+                "symbol": ", ".join(symbols) if symbols else "—",
+                "performance": _to_float(strategy.get("performance", {}).get("percent"), 0.0),
+                "state": state,
+                "latency_ms": None,
+            }
+        )
+    return live
 
 
 def _build_realtime_alerts(limit: int = 20) -> list[dict[str, Any]]:
@@ -335,6 +341,30 @@ async def bot_stop(): return bot_manager.stop()
 
 @router.get("/bot/status")
 async def bot_status(): return bot_manager.status()
+
+# --- Stratégies ---
+@router.get("/strategies")
+async def get_strategies():
+    return bot_manager.strategy_manager.list_strategies()
+
+
+@router.post("/strategies/{strategy_id}/start")
+async def start_strategy(strategy_id: str):
+    return bot_manager.strategy_manager.start_strategy(strategy_id)
+
+
+@router.post("/strategies/{strategy_id}/stop")
+async def stop_strategy(strategy_id: str):
+    return bot_manager.strategy_manager.stop_strategy(strategy_id)
+
+
+@router.patch("/strategies/{strategy_id}/config")
+async def patch_strategy_config(strategy_id: str, payload: StrategyConfigPatch):
+    return bot_manager.strategy_manager.update_config(
+        strategy_id,
+        symbols=payload.symbols,
+        parameters=payload.parameters,
+    )
 
 # --- Config stratégie ---
 @router.get("/config")
@@ -639,8 +669,12 @@ def _fetch_closed_trades(limit: int) -> list[dict[str, Any]]:
         direction=Sort.DESC,
     )
     orders = client.get_orders(request)
+    order_ids = [str(order.id) for order in orders]
+    metadata_map = bot_manager.store.fetch_trade_metadata_map(order_ids)
     trades: list[dict[str, Any]] = []
     for order in orders:
+        order_id = str(order.id)
+        metadata = metadata_map.get(order_id)
         executed_at = order.filled_at or order.submitted_at or order.created_at
         executed_at_ts = None
         if executed_at:
@@ -650,15 +684,19 @@ def _fetch_closed_trades(limit: int) -> list[dict[str, Any]]:
         notional = qty * avg_price
         realized_pnl = _to_float(getattr(order, "realized_pnl", None))
         result = "profit" if realized_pnl >= 0 else "loss"
+        strategy_name = metadata.get("strategy_name") if metadata else _extract_strategy_from_order(order)
+        technical_signal = metadata.get("technical_signal") if metadata else "Signal technique indisponible."
+        ai_explanation = metadata.get("ai_explanation") if metadata else None
+        trigger_news = metadata.get("news") if metadata else None
 
         trades.append(
             {
-                "id": str(order.id),
-                "order_id": str(order.id),
+                "id": order_id,
+                "order_id": order_id,
                 "executed_at": executed_at_ts.isoformat() if executed_at_ts is not None else None,
                 "executed_at_ms": int(executed_at_ts.timestamp() * 1000) if executed_at_ts is not None else None,
                 "symbol": str(order.symbol),
-                "strategy": _extract_strategy_from_order(order),
+                "strategy": strategy_name,
                 "side": str(order.side).lower(),
                 "qty": qty,
                 "avg_price": avg_price,
@@ -667,8 +705,9 @@ def _fetch_closed_trades(limit: int) -> list[dict[str, Any]]:
                 "result": result,
                 "status": str(order.status).lower(),
                 "trigger_type": "technical",
-                "technical_signal": "Signal technique indisponible.",
-                "ai_explanation": None,
+                "technical_signal": technical_signal,
+                "ai_explanation": ai_explanation,
+                "trigger_news": trigger_news,
             }
         )
     return trades

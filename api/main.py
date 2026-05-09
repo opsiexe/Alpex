@@ -9,6 +9,7 @@ from api.bot_manager import bot_manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logger() # logs dès le démarrage
+    bot_manager.restore()
     yield
     bot_manager.stop() # arrêt propre si le bot tourne
 

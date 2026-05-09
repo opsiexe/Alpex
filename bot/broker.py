@@ -24,13 +24,14 @@ def get_account() -> dict:
         "pnl": float(account.equity) - float(account.last_equity)
     }
 
-def place_market_order(symbol: str, qty: int, side: str) -> object:
+def place_market_order(symbol: str, qty: int, side: str, client_order_id: str | None = None) -> object:
     # side = "buy" ou "sell"
     order_data = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
+        client_order_id=client_order_id,
     )
 
     order = client.submit_order(order_data)
