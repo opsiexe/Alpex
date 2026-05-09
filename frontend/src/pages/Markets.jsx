@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
+import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries } from 'lightweight-charts'
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, RefreshCw,
   Activity, BarChart2, Layers, Radio, Bot, Newspaper,
@@ -266,7 +266,7 @@ export default function Markets() {
     // MA
     if (activeIndicators.ma) {
       if (!maSeriesRef.current) {
-        maSeriesRef.current = chartRef.current.addLineSeries({ color: '#f59e0b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
+        maSeriesRef.current = chartRef.current.addSeries(LineSeries, { color: '#f59e0b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
       }
       maSeriesRef.current.setData(computeMA(data))
     } else if (maSeriesRef.current) {
@@ -278,8 +278,8 @@ export default function Markets() {
     if (activeIndicators.bb) {
       const { upper, lower } = computeBB(data)
       if (!bbUpperRef.current) {
-        bbUpperRef.current = chartRef.current.addLineSeries({ color: '#8b5cf6', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false })
-        bbLowerRef.current = chartRef.current.addLineSeries({ color: '#8b5cf6', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false })
+        bbUpperRef.current = chartRef.current.addSeries(LineSeries, { color: '#8b5cf6', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false })
+        bbLowerRef.current = chartRef.current.addSeries(LineSeries, { color: '#8b5cf6', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false })
       }
       bbUpperRef.current.setData(upper)
       bbLowerRef.current.setData(lower)
@@ -291,7 +291,7 @@ export default function Markets() {
     // RSI — separate pane
     if (activeIndicators.rsi) {
       if (!rsiSeriesRef.current) {
-        rsiSeriesRef.current = chartRef.current.addLineSeries({
+        rsiSeriesRef.current = chartRef.current.addSeries(LineSeries, {
           color: '#06b6d4', lineWidth: 1, priceScaleId: 'rsi',
           priceLineVisible: false, lastValueVisible: true,
         })
@@ -307,11 +307,11 @@ export default function Markets() {
     if (activeIndicators.macd) {
       const { macd, signal } = computeMACD(data)
       if (!macdSeriesRef.current) {
-        macdSeriesRef.current = chartRef.current.addLineSeries({
+        macdSeriesRef.current = chartRef.current.addSeries(LineSeries, {
           color: '#10b981', lineWidth: 1, priceScaleId: 'macd',
           priceLineVisible: false, lastValueVisible: true,
         })
-        macdSignalRef.current = chartRef.current.addLineSeries({
+        macdSignalRef.current = chartRef.current.addSeries(LineSeries, {
           color: '#f97316', lineWidth: 1, priceScaleId: 'macd',
           priceLineVisible: false, lastValueVisible: false,
         })
@@ -339,7 +339,7 @@ export default function Markets() {
     })
     chartRef.current = chart
 
-    const cs = chart.addCandlestickSeries({
+    const cs = chart.addSeries(CandlestickSeries, {
       upColor: CHART_COLORS.up,
       downColor: CHART_COLORS.down,
       borderUpColor: CHART_COLORS.up,
