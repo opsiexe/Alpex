@@ -393,7 +393,7 @@ export default function Markets() {
 
     // Reset indicators
     ;[maSeriesRef, bbUpperRef, bbLowerRef, rsiSeriesRef, macdSeriesRef, macdSignalRef].forEach(r => {
-      if (r.current && chartRef.current) { try { chartRef.current.removeSeries(r.current) } catch { } r.current = null }
+      if (r.current && chartRef.current) { try { chartRef.current.removeSeries(r.current) } catch { /* noop */ } r.current = null }
     })
 
     const updatePriceData = (data) => {
@@ -487,11 +487,23 @@ export default function Markets() {
 
   const toggleIndicator = (id) => setActiveIndicators(prev => ({ ...prev, [id]: !prev[id] }))
 
+  const handleSymbolSearchChange = (event) => {
+    const nextValue = event.target.value
+    setSymbolSearch(nextValue)
+    const trimmed = nextValue.trim()
+    if (!trimmed) {
+      setSearchResults([])
+      setSearchLoading(false)
+      return
+    }
+    setSearchLoading(true)
+  }
+
   // Search Symbol Effect
   useEffect(() => {
     const q = symbolSearch.trim()
-    if (!q) { setSearchResults([]); setSearchLoading(false); return }
-    let cancelled = false; setSearchLoading(true)
+    if (!q) return
+    let cancelled = false
     const handle = setTimeout(async () => {
       try {
         const results = await searchSymbols(q, 25)
@@ -525,7 +537,7 @@ export default function Markets() {
               <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-[80] min-w-[360px] max-w-[420px] py-1">
                 <div className="px-3 pt-2 pb-2 border-b border-zinc-800">
                   <input
-                    type="text" value={symbolSearch} onChange={(e) => setSymbolSearch(e.target.value)}
+                    type="text" value={symbolSearch} onChange={handleSymbolSearchChange}
                     placeholder="Rechercher une action..."
                     className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-violet-500"
                   />
@@ -648,3 +660,4 @@ export default function Markets() {
     </div>
   )
 }
+

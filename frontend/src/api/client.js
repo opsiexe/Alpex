@@ -11,6 +11,9 @@ export const getPositions = () => api.get('/positions').then(r => r.data)
 export const getStatus = () => api.get('/bot/status').then(r => r.data)
 export const getConfig = () => api.get('/config').then(r => r.data)
 export const getLogs = (n=100) => api.get(`/logs?limit=${n}`).then(r => r.data)
+export const getDashboardStrategies = () => api.get('/dashboard/strategies').then(r => r.data)
+export const getDashboardAlerts = (limit = 20) => api.get(`/dashboard/alerts?limit=${limit}`).then(r => r.data)
+export const getDashboardAiSummary = (limit = 10) => api.get(`/dashboard/ai-summary?limit=${limit}`).then(r => r.data)
 export const startBot = () => api.post('/bot/start').then(r => r.data)
 export const stopBot = () => api.post('/bot/stop').then(r => r.data)
 
@@ -38,6 +41,30 @@ export const getMarketSummary = (symbol) =>
   api.get(`/market-summary?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
 export const getMarketTrades = (symbol) =>
   api.get(`/trades?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
+
+// History REST
+export const getTradeHistory = (filters = {}) => {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && `${value}`.trim() !== '') {
+      params.set(key, value)
+    }
+  })
+  return api.get(`/trades/history?${params.toString()}`).then(r => r.data)
+}
+
+export const getTradeHistoryDetail = (tradeId) =>
+  api.get(`/trades/history/${encodeURIComponent(tradeId)}`).then(r => r.data)
+
+export const exportTradeHistoryCsv = (filters = {}) => {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && `${value}`.trim() !== '') {
+      params.set(key, value)
+    }
+  })
+  return api.get(`/trades/history/export?${params.toString()}`, { responseType: 'blob' }).then(r => r.data)
+}
 
 export const connectCandlesWS = (symbol, tf, onMsg, onOpen, onClose) => {
   const ws = new WebSocket(`${WS}/ws/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}`)

@@ -1,12 +1,18 @@
 import asyncio
+import csv
+import io
 import re
 from typing import Any
 import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import APIRouter, HTTPException, Query, Request
-from bot.broker import get_account, get_position
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
+from alpaca.common.enums import Sort
+from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.requests import GetOrdersRequest
+from bot.broker import client, get_account, get_position
 from bot.logger import log_buffer
 from api.bot_manager import bot_manager
 from config import MA_SHORT, MA_LONG, SYMBOL
@@ -220,6 +226,96 @@ def summarize_news(news: list[dict[str, Any]]) -> dict[str, Any]:
         return {"summary": "Aucune actualité récente trouvée.", "sentiment": 0.0}
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_live_strategies() -> list[dict[str, Any]]:
+    account = get_account()
+    equity = _to_float(account.get("equity"), 0.0)
+    pnl = _to_float(account.get("pnl"), 0.0)
+    base_equity = max(equity - pnl, 1.0)
+    performance = (pnl / base_equity) * 100.0
+    state = "active" if bot_manager.running else "paused"
+
+    return [
+        {
+            "id": "ma-crossover",
+            "name": f"MA Crossover {MA_SHORT}/{MA_LONG}",
+            "symbol": SYMBOL,
+            "performance": performance,
+            "state": state,
+            "latency_ms": None,
+        }
+    ]
+
+
+def _build_realtime_alerts(limit: int = 20) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    for entry in reversed(list(log_buffer)):
+        level_raw = str(entry.get("level", "")).upper()
+        if level_raw not in {"WARNING", "WARN", "ERROR", "CRITICAL"}:
+            continue
+        level = "critical" if level_raw in {"ERROR", "CRITICAL"} else "warning"
+        time = str(entry.get("time") or "—")
+        text = str(entry.get("message") or "")
+        if not text:
+            continue
+        alerts.append(
+            {
+                "id": f"alert-{time}-{level_raw}-{len(alerts)}",
+                "level": level,
+                "time": time,
+                "text": text,
+            }
+        )
+        if len(alerts) >= limit:
+            break
+    return alerts
+
+
+def _build_ai_summary(limit: int = 10, symbol: str | None = None) -> dict[str, Any]:
+    target_symbol = symbol or SYMBOL
+    try:
+        news_items = fetch_news(target_symbol, limit)
+    except Exception:
+        news_items = []
+
+    if not news_items:
+        return {"headline": "Aucun résumé IA disponible.", "bullets": [], "confidence": None}
+
+    try:
+        ai_data = get_complete_trading_analysis(news_items)
+    except Exception:
+        ai_data = {}
+
+    headline = str(ai_data.get("global_summary") or "Résumé IA indisponible.")
+    bullets = [
+        str(item.get("title") or "").strip()
+        for item in news_items[:3]
+        if str(item.get("title") or "").strip()
+    ]
+
+    scores: list[float] = []
+    for item in ai_data.get("news_analysis", []) or []:
+        score = _to_float(item.get("score"), None)
+        if score is not None:
+            scores.append(score)
+
+    confidence = int(round(sum(scores) / len(scores))) if scores else None
+
+    return {
+        "headline": headline,
+        "bullets": bullets,
+        "confidence": confidence,
+    }
+
+
 # --- Compte ---
 @router.get("/account")
 async def account():
@@ -249,6 +345,99 @@ async def get_config():
 @router.get("/logs")
 async def get_logs(limit: int = 100):
     return list(log_buffer)[-limit:]
+
+
+@router.get("/dashboard/strategies")
+async def get_dashboard_strategies():
+    return _build_live_strategies()
+
+
+@router.get("/dashboard/alerts")
+async def get_dashboard_alerts(limit: int = Query(20, ge=1, le=200)):
+    return _build_realtime_alerts(limit)
+
+
+@router.get("/dashboard/ai-summary")
+async def get_dashboard_ai_summary(limit: int = Query(10, ge=1, le=50)):
+    return await asyncio.to_thread(_build_ai_summary, limit)
+
+@router.get("/trades/history")
+async def get_trades_history(
+    limit: int = Query(200, ge=1, le=500),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    symbol: str | None = Query(None),
+    strategy: str | None = Query(None),
+    side: str | None = Query(None),
+    result: str | None = Query(None),
+):
+    try:
+        start_dt = _parse_datetime_filter(start, "start")
+        end_dt = _parse_datetime_filter(end, "end")
+        if start_dt and end_dt and start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="Paramètres invalides: start doit être antérieur à end")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        trades = await asyncio.to_thread(_fetch_closed_trades, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur récupération historique trades: {exc}") from exc
+
+    filtered = _apply_trades_filters(trades, start_dt, end_dt, symbol, strategy, side, result)
+    return {
+        "items": filtered,
+        "total": len(filtered),
+        "strategies": _extract_strategies(trades),
+    }
+
+
+@router.get("/trades/history/export")
+async def export_trades_history(
+    limit: int = Query(500, ge=1, le=500),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    symbol: str | None = Query(None),
+    strategy: str | None = Query(None),
+    side: str | None = Query(None),
+    result: str | None = Query(None),
+):
+    try:
+        start_dt = _parse_datetime_filter(start, "start")
+        end_dt = _parse_datetime_filter(end, "end")
+        if start_dt and end_dt and start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="Paramètres invalides: start doit être antérieur à end")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        trades = await asyncio.to_thread(_fetch_closed_trades, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur export historique trades: {exc}") from exc
+
+    filtered = _apply_trades_filters(trades, start_dt, end_dt, symbol, strategy, side, result)
+    csv_payload = _build_history_csv(filtered)
+
+    return Response(
+        content=csv_payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=trade-history.csv"},
+    )
+
+
+@router.get("/trades/history/{trade_id}")
+async def get_trade_history_detail(trade_id: str):
+    try:
+        trades = await asyncio.to_thread(_fetch_closed_trades, 500)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur récupération détail trade: {exc}") from exc
+
+    trade = next((item for item in trades if item["id"] == trade_id), None)
+    if trade is None:
+        raise HTTPException(status_code=404, detail="Trade introuvable")
+
+    detail = await asyncio.to_thread(_enrich_trade_detail, trade)
+    return detail
 
 
 @router.get("/candles")
@@ -333,3 +522,171 @@ async def get_analyzed_news(
         # Log l'erreur pour le debug interne
         print(f"Erreur Route News: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_datetime_filter(raw: str | None, label: str):
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        return pd.to_datetime(value, utc=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Parametre {label} invalide: {value}") from exc
+
+
+def _apply_trades_filters(
+    trades: list[dict[str, Any]],
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    symbol: str | None = None,
+    strategy: str | None = None,
+    side: str | None = None,
+    result: str | None = None,
+) -> list[dict[str, Any]]:
+    normalized_symbol = (symbol or "").strip().upper()
+    normalized_strategy = (strategy or "").strip().lower()
+    normalized_side = (side or "").strip().lower()
+    normalized_result = (result or "").strip().lower()
+
+    filtered: list[dict[str, Any]] = []
+    for trade in trades:
+        executed_at = trade.get("executed_at")
+        try:
+            executed_dt = pd.to_datetime(executed_at, utc=True) if executed_at else None
+        except (TypeError, ValueError):
+            executed_dt = None
+
+        if start and executed_dt and executed_dt < start:
+            continue
+        if end and executed_dt and executed_dt > end:
+            continue
+
+        trade_symbol = str(trade.get("symbol") or "").upper()
+        trade_strategy = str(trade.get("strategy") or "").strip().lower()
+        trade_side = str(trade.get("side") or "").strip().lower()
+        trade_result = str(trade.get("result") or "").strip().lower()
+
+        if normalized_symbol and trade_symbol != normalized_symbol:
+            continue
+        if normalized_strategy and trade_strategy != normalized_strategy:
+            continue
+        if normalized_side and trade_side != normalized_side:
+            continue
+        if normalized_result and trade_result != normalized_result:
+            continue
+
+        filtered.append(trade)
+
+    return filtered
+
+
+def _extract_strategies(trades: list[dict[str, Any]]) -> list[str]:
+    strategies = {str(item.get("strategy") or "").strip() for item in trades}
+    cleaned = sorted({s for s in strategies if s})
+    return cleaned
+
+
+def _build_history_csv(trades: list[dict[str, Any]]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "executed_at",
+            "symbol",
+            "strategy",
+            "side",
+            "qty",
+            "avg_price",
+            "notional",
+            "realized_pnl",
+            "result",
+            "status",
+            "order_id",
+        ],
+    )
+    writer.writeheader()
+    for trade in trades:
+        writer.writerow({
+            "executed_at": trade.get("executed_at"),
+            "symbol": trade.get("symbol"),
+            "strategy": trade.get("strategy"),
+            "side": trade.get("side"),
+            "qty": trade.get("qty"),
+            "avg_price": trade.get("avg_price"),
+            "notional": trade.get("notional"),
+            "realized_pnl": trade.get("realized_pnl"),
+            "result": trade.get("result"),
+            "status": trade.get("status"),
+            "order_id": trade.get("order_id"),
+        })
+    return output.getvalue()
+
+
+def _extract_strategy_from_order(order: Any) -> str:
+    client_id = str(getattr(order, "client_order_id", "") or "")
+    match = re.search(r"strategy[:=]([A-Za-z0-9 _-]+)", client_id)
+    if match:
+        return match.group(1).strip()
+    return "MA Crossover"
+
+
+def _fetch_closed_trades(limit: int) -> list[dict[str, Any]]:
+    request = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED,
+        limit=limit,
+        direction=Sort.DESC,
+    )
+    orders = client.get_orders(request)
+    trades: list[dict[str, Any]] = []
+    for order in orders:
+        executed_at = order.filled_at or order.submitted_at or order.created_at
+        executed_at_ts = None
+        if executed_at:
+            executed_at_ts = pd.to_datetime(executed_at, utc=True)
+        qty = _to_float(getattr(order, "filled_qty", None) or getattr(order, "qty", None))
+        avg_price = _to_float(getattr(order, "filled_avg_price", None) or getattr(order, "limit_price", None))
+        notional = qty * avg_price
+        realized_pnl = _to_float(getattr(order, "realized_pnl", None))
+        result = "profit" if realized_pnl >= 0 else "loss"
+
+        trades.append(
+            {
+                "id": str(order.id),
+                "order_id": str(order.id),
+                "executed_at": executed_at_ts.isoformat() if executed_at_ts is not None else None,
+                "executed_at_ms": int(executed_at_ts.timestamp() * 1000) if executed_at_ts is not None else None,
+                "symbol": str(order.symbol),
+                "strategy": _extract_strategy_from_order(order),
+                "side": str(order.side).lower(),
+                "qty": qty,
+                "avg_price": avg_price,
+                "notional": notional,
+                "realized_pnl": realized_pnl,
+                "result": result,
+                "status": str(order.status).lower(),
+                "trigger_type": "technical",
+                "technical_signal": "Signal technique indisponible.",
+                "ai_explanation": None,
+            }
+        )
+    return trades
+
+
+def _enrich_trade_detail(trade: dict[str, Any]) -> dict[str, Any]:
+    detail = dict(trade)
+    detail["technical_signal"] = trade.get("technical_signal") or "Signal technique indisponible."
+    detail["ai_trade_explanation"] = (
+        trade.get("ai_trade_explanation")
+        or trade.get("ai_explanation")
+        or "Aucune explication IA disponible pour ce trade."
+    )
+    detail["trigger_news"] = trade.get("trigger_news")
+
+    try:
+        detail["chart"] = fetch_candles(str(trade.get("symbol") or SYMBOL), "1h", 60)
+    except Exception:
+        detail["chart"] = []
+
+    return detail
