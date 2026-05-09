@@ -21,7 +21,7 @@ const STOCKS = [
   { symbol: 'AMD', name: 'AMD' },
   { symbol: 'INTC', name: 'Intel' },
 ]
-const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
+const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M', '3M']
 const MACD_SIGNAL_PERIOD = 9
 
 const INDICATORS = [
@@ -143,7 +143,7 @@ function buildTradeMarkers(trades) {
 
 /* ── Generate demo candles ───────────────────────── */
 function generateDemoCandles(symbol, tf) {
-  const tfMs = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 }
+  const tfMs = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800, '1M': 2592000, '3M': 7776000 }
   const step = tfMs[tf] || 3600
   const basePrice = { AAPL: 185, MSFT: 425, NVDA: 915, AMZN: 180, GOOGL: 170, META: 495, TSLA: 175, NFLX: 610, AMD: 165, INTC: 38 }[symbol] || 100
   const now = Math.floor(Date.now() / 1000)
