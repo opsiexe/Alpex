@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries } from 'lightweight-charts'
+import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts'
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, RefreshCw,
   Activity, BarChart2, Layers, Radio, Bot, Newspaper,
@@ -9,7 +9,18 @@ import {
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const WS_BASE = BASE.replace(/^http/, 'ws')
 
-const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT']
+const STOCKS = [
+  { symbol: 'AAPL', name: 'Apple' },
+  { symbol: 'MSFT', name: 'Microsoft' },
+  { symbol: 'NVDA', name: 'NVIDIA' },
+  { symbol: 'AMZN', name: 'Amazon' },
+  { symbol: 'GOOGL', name: 'Alphabet' },
+  { symbol: 'META', name: 'Meta' },
+  { symbol: 'TSLA', name: 'Tesla' },
+  { symbol: 'NFLX', name: 'Netflix' },
+  { symbol: 'AMD', name: 'AMD' },
+  { symbol: 'INTC', name: 'Intel' },
+]
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
 const MACD_SIGNAL_PERIOD = 9
 
@@ -134,7 +145,7 @@ function buildTradeMarkers(trades) {
 function generateDemoCandles(symbol, tf) {
   const tfMs = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 }
   const step = tfMs[tf] || 3600
-  const basePrice = { 'BTC/USDT': 67000, 'ETH/USDT': 3500, 'SOL/USDT': 175, 'BNB/USDT': 580, 'ADA/USDT': 0.45, 'XRP/USDT': 0.55 }[symbol] || 100
+  const basePrice = { AAPL: 185, MSFT: 425, NVDA: 915, AMZN: 180, GOOGL: 170, META: 495, TSLA: 175, NFLX: 610, AMD: 165, INTC: 38 }[symbol] || 100
   const now = Math.floor(Date.now() / 1000)
   const count = 300
   const candles = []
@@ -159,20 +170,20 @@ function generateDemoTrades(candles) {
 }
 
 function generateDemoNews(symbol) {
-  const base = symbol.split('/')[0]
+  const base = symbol
   const items = [
-    { title: `${base} franchit un niveau clé de résistance, les analystes anticipent une hausse`, sentiment: 0.72, source: 'CoinDesk', url: '#', timestamp: Date.now() - 420000 },
-    { title: `La SEC examine de nouvelles réglementations pouvant affecter ${base}`, sentiment: -0.41, source: 'Reuters', url: '#', timestamp: Date.now() - 900000 },
-    { title: `Les volumes d'échange de ${base} atteignent un sommet mensuel`, sentiment: 0.35, source: 'Bloomberg', url: '#', timestamp: Date.now() - 1800000 },
-    { title: `Mise à jour du réseau ${base} prévue pour le prochain trimestre`, sentiment: 0.12, source: 'CryptoNews', url: '#', timestamp: Date.now() - 3600000 },
+    { title: `${base} franchit un niveau clé de résistance, les analystes anticipent une hausse`, sentiment: 0.72, source: 'Reuters', url: '#', timestamp: Date.now() - 420000 },
+    { title: `La SEC examine de nouvelles réglementations pouvant affecter ${base}`, sentiment: -0.41, source: 'Bloomberg', url: '#', timestamp: Date.now() - 900000 },
+    { title: `Le volume d'échange de ${base} atteint un sommet mensuel`, sentiment: 0.35, source: 'MarketWatch', url: '#', timestamp: Date.now() - 1800000 },
+    { title: `${base} annonce ses résultats trimestriels au-dessus des attentes`, sentiment: 0.54, source: 'CNBC', url: '#', timestamp: Date.now() - 3600000 },
     { title: `Analyse technique : ${base} consolide avant un mouvement directionnel`, sentiment: -0.05, source: 'TradingView', url: '#', timestamp: Date.now() - 5400000 },
-    { title: `Whale alert : transfert massif de ${base} vers un exchange centralisé`, sentiment: -0.55, source: 'Whale Alert', url: '#', timestamp: Date.now() - 7200000 },
+    { title: `Les flux institutionnels sur ${base} reculent sur la dernière séance`, sentiment: -0.32, source: 'Financial Times', url: '#', timestamp: Date.now() - 7200000 },
   ]
   return items
 }
 
 function generateAISummary(symbol) {
-  const base = symbol.split('/')[0]
+  const base = symbol
   return `${base} montre une dynamique haussière modérée sur les sessions récentes. Le sentiment global des actualités est légèrement positif (score +0.18). Les volumes sont en hausse de 12% par rapport à la moyenne hebdomadaire. Attention au niveau de résistance à surveiller dans les prochaines heures.`
 }
 
@@ -189,13 +200,15 @@ export default function Markets() {
   const rsiSeriesRef = useRef(null)
   const macdSeriesRef = useRef(null)
   const macdSignalRef = useRef(null)
+  const tradeMarkersRef = useRef(null)
   const wsRef = useRef(null)
 
-  const [symbol, setSymbol] = useState('BTC/USDT')
+  const [symbol, setSymbol] = useState('AAPL')
   const [timeframe, setTimeframe] = useState('1h')
   const [activeIndicators, setActiveIndicators] = useState({ ma: true, bb: false, rsi: false, macd: false })
   const [showSymbolMenu, setShowSymbolMenu] = useState(false)
   const [showTfMenu, setShowTfMenu] = useState(false)
+  const [symbolSearch, setSymbolSearch] = useState('')
   const [currentPrice, setCurrentPrice] = useState(null)
   const [priceChange, setPriceChange] = useState(null)
   const [wsConnected, setWsConnected] = useState(false)
@@ -257,6 +270,19 @@ export default function Markets() {
     let sig = macdLine[0].value
     const signal = macdLine.map((d, i) => { if (i === 0) return { time: d.time, value: sig }; sig = d.value * k + sig * (1 - k); return { time: d.time, value: +sig.toFixed(4) } })
     return { macd: macdLine, signal }
+  }, [])
+
+  const setTradeMarkers = useCallback((markers) => {
+    if (!candleSeriesRef.current) return
+    if (typeof candleSeriesRef.current.setMarkers === 'function') {
+      candleSeriesRef.current.setMarkers(markers)
+      return
+    }
+    if (!tradeMarkersRef.current) {
+      tradeMarkersRef.current = createSeriesMarkers(candleSeriesRef.current, markers)
+      return
+    }
+    tradeMarkersRef.current.setMarkers(markers)
   }, [])
 
   /* ── Build / update indicator series ─────────── */
@@ -366,6 +392,7 @@ export default function Markets() {
       rsiSeriesRef.current = null
       macdSeriesRef.current = null
       macdSignalRef.current = null
+      tradeMarkersRef.current = null
     }
   }, [])
 
@@ -394,7 +421,7 @@ export default function Markets() {
     // Trade overlays
     if (showTrades) {
       const trades = generateDemoTrades(data)
-      candleSeriesRef.current.setMarkers(buildTradeMarkers(trades))
+      setTradeMarkers(buildTradeMarkers(trades))
     }
 
     chartRef.current?.timeScale().fitContent()
@@ -439,15 +466,20 @@ export default function Markets() {
   useEffect(() => {
     if (!candleSeriesRef.current || !candles.length) return
     if (showTrades) {
-      candleSeriesRef.current.setMarkers(buildTradeMarkers(generateDemoTrades(candles)))
+      setTradeMarkers(buildTradeMarkers(generateDemoTrades(candles)))
     } else {
-      candleSeriesRef.current.setMarkers([])
+      setTradeMarkers([])
     }
-  }, [showTrades, candles])
+  }, [showTrades, candles, setTradeMarkers])
 
   const toggleIndicator = (id) => setActiveIndicators(prev => ({ ...prev, [id]: !prev[id] }))
 
   const isPositive = priceChange >= 0
+  const filteredStocks = STOCKS.filter((s) => {
+    const q = symbolSearch.trim().toLowerCase()
+    if (!q) return true
+    return s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
+  })
 
   return (
     <div className="flex h-full overflow-hidden bg-zinc-950 text-zinc-100">
@@ -456,11 +488,11 @@ export default function Markets() {
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
 
         {/* ── Toolbar ── */}
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur shrink-0 flex-wrap">
+        <div className="relative z-50 flex items-center gap-2 px-4 py-2.5 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur shrink-0 flex-wrap">
 
           {/* Symbol picker */}
           <div className="relative">
-            <button
+              <button
               onClick={() => { setShowSymbolMenu(p => !p); setShowTfMenu(false) }}
               className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm font-bold transition-colors"
             >
@@ -469,16 +501,36 @@ export default function Markets() {
               <ChevronDown size={13} className="text-zinc-400" />
             </button>
             {showSymbolMenu && (
-              <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 min-w-[140px] py-1">
-                {SYMBOLS.map(s => (
-                  <button
-                    key={s}
-                    onClick={() => { setSymbol(s); setShowSymbolMenu(false) }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 transition-colors ${s === symbol ? 'text-violet-400 font-semibold' : 'text-zinc-300'}`}
-                  >{s}</button>
-                ))}
+              <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-[80] min-w-[240px] py-1">
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {filteredStocks.length === 0 ? (
+                    <div className="px-4 py-2 text-xs text-zinc-500">Aucun résultat</div>
+                  ) : (
+                    filteredStocks.map((s) => (
+                      <button
+                        key={s.symbol}
+                        onClick={() => { setSymbol(s.symbol); setShowSymbolMenu(false); setSymbolSearch('') }}
+                        className={`w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 transition-colors ${s.symbol === symbol ? 'text-violet-400 font-semibold' : 'text-zinc-300'}`}
+                      >
+                        <span className="font-semibold">{s.symbol}</span>
+                        <span className="ml-2 text-zinc-500 text-xs">{s.name}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
             )}
+          </div>
+
+          <div className="w-[260px] max-w-full">
+            <input
+              type="text"
+              value={symbolSearch}
+              onFocus={() => { setShowSymbolMenu(true); setShowTfMenu(false) }}
+              onChange={(e) => { setSymbolSearch(e.target.value); setShowSymbolMenu(true); setShowTfMenu(false) }}
+              placeholder="Rechercher une action..."
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-violet-500"
+            />
           </div>
 
           {/* Price display */}
@@ -507,7 +559,7 @@ export default function Markets() {
               <ChevronDown size={12} className="text-zinc-400" />
             </button>
             {showTfMenu && (
-              <div className="absolute top-full right-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 py-1">
+              <div className="absolute top-full right-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-[80] py-1">
                 {TIMEFRAMES.map(tf => (
                   <button
                     key={tf}
@@ -557,9 +609,9 @@ export default function Markets() {
         {/* ── Chart ── */}
         <div
           ref={chartContainerRef}
-          className="flex-1 w-full"
+          className="relative z-0 flex-1 w-full"
           style={{ minHeight: 0 }}
-          onClick={() => { setShowSymbolMenu(false); setShowTfMenu(false) }}
+          onClick={() => { setShowSymbolMenu(false); setShowTfMenu(false); setSymbolSearch('') }}
         />
       </div>
 
@@ -636,7 +688,7 @@ export default function Markets() {
 
       {/* Close dropdowns on outside click */}
       {(showSymbolMenu || showTfMenu) && (
-        <div className="fixed inset-0 z-40" onClick={() => { setShowSymbolMenu(false); setShowTfMenu(false) }} />
+        <div className="fixed inset-0 z-40" onClick={() => { setShowSymbolMenu(false); setShowTfMenu(false); setSymbolSearch('') }} />
       )}
     </div>
   )
