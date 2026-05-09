@@ -26,3 +26,21 @@ export const connectMetricsWS = (onMsg) => {
   ws.onmessage = e => onMsg(JSON.parse(e.data))
   return ws
 }
+
+// Markets REST
+export const getCandles = (symbol, tf, limit = 300) =>
+  api.get(`/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}&limit=${limit}`).then(r => r.data)
+export const getNews = (symbol) =>
+  api.get(`/news?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
+export const getMarketSummary = (symbol) =>
+  api.get(`/market-summary?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
+export const getMarketTrades = (symbol) =>
+  api.get(`/trades?symbol=${encodeURIComponent(symbol)}`).then(r => r.data)
+
+export const connectCandlesWS = (symbol, tf, onMsg, onOpen, onClose) => {
+  const ws = new WebSocket(`${WS}/ws/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}`)
+  if (onOpen) ws.onopen = onOpen
+  if (onClose) ws.onclose = onClose
+  ws.onmessage = e => { try { onMsg(JSON.parse(e.data)) } catch (err) { console.error('[CandlesWS] Failed to parse message', err) } }
+  return ws
+}
